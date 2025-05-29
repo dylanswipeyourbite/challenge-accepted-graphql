@@ -21,6 +21,28 @@ export const typeDefs = gql`#graphql
     comments: [Comment!]!
     hasCheered: Boolean! 
     caption: String
+    dailyLogId: ID
+    dailyLog: DailyLog
+  }
+
+  type DailyLog {
+    id: ID!
+    challengeId: ID!
+    participantId: ID!
+    user: User!
+    type: LogType!
+    activityType: String
+    notes: String
+    date: Date!
+    points: Int!
+    createdAt: Date!
+    media: [Media!]  # Media uploaded for this log entry
+    participant: Participant  # Updated participant data
+  }
+
+  enum LogType {
+    activity
+    rest
   }
 
   type Comment {
@@ -46,6 +68,9 @@ export const typeDefs = gql`#graphql
     dailyStreak: Int
     lastPostDate: Date
     restDays: Int
+    totalPoints: Int
+    weeklyRestDaysUsed: Int
+    lastLogDate: Date
   }
 
   enum ParticipantRole {
@@ -93,13 +118,40 @@ export const typeDefs = gql`#graphql
     expired
   }
 
+  type UserStats {
+    currentStreak: Int!
+    totalPoints: Int!
+    completedChallenges: Int!
+    activeChallenge: ActiveChallengeInfo
+  }
+
+  type ActiveChallengeInfo {
+    id: ID!
+    title: String!
+    allowedRestDays: Int!
+    usedRestDaysThisWeek: Int!
+    hasLoggedToday: Boolean!
+  }
+
+  type WeeklyProgress {
+    weekStart: Date!
+    weekEnd: Date!
+    activityDays: Int!
+    restDays: Int!
+    totalPoints: Int!
+    logs: [DailyLog!]!
+  }
+
   type Query {
+    userStats: UserStats!
     media(challengeId: ID!): [Media!]!
     mediaByChallenge(challengeId: ID!): [Media!]!
     timelineMedia: [Media!]!
     pendingChallenges: [Challenge!]!
     challenges: [Challenge!]!
     challenge(id: ID!): Challenge
+    dailyLogs(challengeId: ID!): [DailyLog!]!
+    weeklyProgress(challengeId: ID!): WeeklyProgress!
   }
 
   type Mutation {
@@ -112,6 +164,7 @@ export const typeDefs = gql`#graphql
     cheerPost(mediaId: ID!): Boolean!
     uncheerPost(mediaId: ID!): Boolean!
     addComment(input: AddCommentInput!): Comment!
+    logDailyActivity(input: LogActivityInput!): DailyLog!
   }
 
   input CreateUserInput {
@@ -148,7 +201,16 @@ export const typeDefs = gql`#graphql
     text: String!
   }
 
+  input LogActivityInput {
+    challengeId: ID!
+    type: LogType!
+    activityType: String
+    notes: String
+    date: Date!
+  }
+
   type Subscription {
     challengeUpdated: Challenge
+    mediaAdded(challengeId: ID!): Media
   }
 `;

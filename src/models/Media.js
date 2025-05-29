@@ -17,7 +17,8 @@ export const mediaSchema = new mongoose.Schema({
   caption: { type: String },
 
   cheers: { type: [String], default: [] }, 
-  comments: { type: [commentSchema], default: [] }  
+  comments: { type: [commentSchema], default: [] },
+  dailyLogId: { type: mongoose.Schema.Types.ObjectId, ref: 'DailyLog' }  
 });
 
 export const mediaModel = mongoose.model('Media', mediaSchema);

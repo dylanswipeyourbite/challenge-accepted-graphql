@@ -1,3 +1,5 @@
+// In Participant.js - Make sure the media field has proper defaults
+
 import mongoose from 'mongoose';
 import { mediaSchema } from './Media.js';
 
@@ -29,12 +31,26 @@ export const participantSchema = new mongoose.Schema({
     type: Date, 
     default: Date.now 
   },
-  restDays: { type: Number, required: false },
-  media: [mediaSchema],
-  dailyStreak: { type: Number, default: 0 },
-  lastPostDate: { type: Date } 
-},
-);
+  restDays: { 
+    type: Number, 
+    required: false 
+  },
+  media: {
+    type: [mediaSchema],
+    default: []  // Explicitly set default to empty array
+  },
+  dailyStreak: { 
+    type: Number, 
+    default: 0 
+  },
+  lastPostDate: { 
+    type: Date 
+  },
+  totalPoints: {
+    type: Number,
+    default: 0
+  }
+});
 
 // ✅ Safe export to prevent OverwriteModelError
 export const participantModel = mongoose.models.Participant || mongoose.model('Participant', participantSchema);
