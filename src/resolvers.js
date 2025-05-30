@@ -12,6 +12,10 @@ const pubsub = new PubSub();
 
 export const getPubSub = () => pubsub;
 
+// SUBSCRIPTION FOR REAL-TIME UPDATES
+const MEDIA_ADDED = 'MEDIA_ADDED';
+const CHALLENGE_UPDATED = 'CHALLENGE_UPDATED';
+
 const dateScalar = new GraphQLScalarType({
   name: 'Date',
   description: 'Date custom scalar type',
@@ -26,9 +30,14 @@ const dateScalar = new GraphQLScalarType({
   }
 });
 
-// SUBSCRIPTION FOR REAL-TIME UPDATES
-const MEDIA_ADDED = 'MEDIA_ADDED';
-const CHALLENGE_UPDATED = 'CHALLENGE_UPDATED';
+function getWeekStart(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day; // Adjust to get Monday as start of week
+  const weekStart = new Date(d.setDate(diff));
+  weekStart.setHours(0, 0, 0, 0);
+  return weekStart;
+}
 
 export const resolvers = {
   Date: dateScalar,
@@ -407,103 +416,113 @@ export const resolvers = {
     },
 
     logDailyActivity: async (_, { input }, { userId }) => {
-    if (!userId) throw new GraphQLError('Not authenticated');
-
-    const { challengeId, type, activityType, notes, date } = input;
+      if (!userId) throw new GraphQLError('Not authenticated');
     
-    // Get the challenge and participant
-    const challenge = await challengeModel.findById(challengeId);
-    if (!challenge) throw new GraphQLError('Challenge not found');
-
-    const participant = challenge.participants.find(
-      p => p.user.toString() === userId.toString()
-    );
-    if (!participant) throw new GraphQLError('Not a participant in this challenge');
-
-    // Check if already logged today
-    const today = new Date(date);
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const existingLog = await dailyLogModel.findOne({
-      challengeId,
-      user: userId,
-      date: { $gte: today, $lt: tomorrow }
-    });
-
-    if (existingLog) {
-      throw new GraphQLError('Already logged activity for today');
-    }
-
-    // Calculate points based on type
-    let points = 0;
-    if (type === 'activity') {
-      points = 10;
-    } else if (type === 'rest') {
-      // Check if user has rest days available
-      const weekStart = getWeekStart(today);
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 7);
-
-      const restDaysThisWeek = await dailyLogModel.countDocuments({
+      const { challengeId, type, activityType, notes, date } = input;
+      
+      // Get the challenge and participant
+      const challenge = await challengeModel.findById(challengeId);
+      if (!challenge) throw new GraphQLError('Challenge not found');
+    
+      const participant = challenge.participants.find(
+        p => p.user.toString() === userId.toString()
+      );
+      if (!participant) throw new GraphQLError('Not a participant in this challenge');
+    
+      // Check if already logged today
+      const today = new Date(date);
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+    
+      const existingLog = await dailyLogModel.findOne({
         challengeId,
         user: userId,
-        type: 'rest',
-        date: { $gte: weekStart, $lt: weekEnd }
+        date: { $gte: today, $lt: tomorrow }
       });
-
-      if (restDaysThisWeek >= participant.restDays) {
-        throw new GraphQLError('No rest days remaining this week');
-      }
-
-      points = 5;
-    }
-
-    // Create the daily log
-    const dailyLog = await dailyLogModel.create({
-      challengeId,
-      participantId: participant._id,
-      user: userId,
-      type,
-      activityType,
-      notes,
-      date: today,
-      points
-    });
-
-    // Update participant stats
-    participant.totalPoints = (participant.totalPoints || 0) + points;
-    participant.lastLogDate = today;
     
-    // Update streak
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    
-    const loggedYesterday = await dailyLogModel.findOne({
-      challengeId,
-      user: userId,
-      date: { $gte: yesterday, $lt: today }
-    });
-
-    if (loggedYesterday || participant.dailyStreak === 0) {
-      participant.dailyStreak = (participant.dailyStreak || 0) + 1;
-    } else {
-      participant.dailyStreak = 1; // Reset streak if gap found
-    }
-
-    await challenge.save();
-
-    // 🔔 Publish challenge update for real-time sync
-    pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
-
-    return {
-      ...dailyLog.toObject(),
-      participant: {
-        dailyStreak: participant.dailyStreak,
-        totalPoints: participant.totalPoints
+      if (existingLog) {
+        throw new GraphQLError('Already logged activity for today');
       }
-    };
+    
+      // Calculate points based on type
+      let points = 0;
+      if (type === 'activity') {
+        points = 10;
+      } else if (type === 'rest') {
+        // Check if user has rest days available
+        const weekStart = getWeekStart(today);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 7);
+    
+        const restDaysThisWeek = await dailyLogModel.countDocuments({
+          challengeId,
+          user: userId,
+          type: 'rest',
+          date: { $gte: weekStart, $lt: weekEnd }
+        });
+    
+        if (restDaysThisWeek >= participant.restDays) {
+          throw new GraphQLError('No rest days remaining this week');
+        }
+    
+        points = 5;
+      }
+    
+      // Create the daily log
+      const dailyLog = await dailyLogModel.create({
+        challengeId,
+        participantId: participant._id,
+        user: userId,
+        type,
+        activityType,
+        notes,
+        date: today,
+        points
+      });
+    
+      // Update participant stats
+      participant.totalPoints = (participant.totalPoints || 0) + points;
+      participant.lastLogDate = today;
+      
+      // Update streak
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      
+      const loggedYesterday = await dailyLogModel.findOne({
+        challengeId,
+        user: userId,
+        date: { $gte: yesterday, $lt: today }
+      });
+    
+      if (loggedYesterday || participant.dailyStreak === 0) {
+        participant.dailyStreak = (participant.dailyStreak || 0) + 1;
+      } else {
+        participant.dailyStreak = 1; // Reset streak if gap found
+      }
+    
+      await challenge.save();
+    
+      // 🔔 Publish challenge update for real-time sync
+      pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
+    
+      // ✅ FIX: Return the dailyLog with proper id field
+      return {
+        id: dailyLog._id.toString(), // Convert MongoDB _id to string
+        challengeId: dailyLog.challengeId.toString(),
+        participantId: dailyLog.participantId.toString(),
+        user: dailyLog.user.toString(),
+        type: dailyLog.type,
+        activityType: dailyLog.activityType,
+        notes: dailyLog.notes,
+        date: dailyLog.date,
+        points: dailyLog.points,
+        createdAt: dailyLog.createdAt,
+        participant: {
+          dailyStreak: participant.dailyStreak,
+          totalPoints: participant.totalPoints
+        }
+      };
     },
 
     addMedia: async (_, { input }, { userId }) => {
