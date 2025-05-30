@@ -71,6 +71,7 @@ export const typeDefs = gql`#graphql
     totalPoints: Int
     weeklyRestDaysUsed: Int
     lastLogDate: Date
+    isCurrentUser: Boolean! 
   }
 
   enum ParticipantRole {

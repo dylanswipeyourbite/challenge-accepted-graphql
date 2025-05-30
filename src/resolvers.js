@@ -39,6 +39,51 @@ function getWeekStart(date) {
   return weekStart;
 }
 
+// Helper function to add isCurrentUser to participants
+// Helper function to add isCurrentUser to participants
+const addIsCurrentUserToParticipants = (challenge, userId) => {
+  const challengeObj = challenge.toObject ? challenge.toObject() : challenge;
+  
+  // Ensure the id field is present for challenge
+  if (!challengeObj.id && challengeObj._id) {
+    challengeObj.id = challengeObj._id.toString();
+  }
+  
+  // Handle createdBy field
+  if (challengeObj.createdBy) {
+    if (challengeObj.createdBy._id && !challengeObj.createdBy.id) {
+      challengeObj.createdBy.id = challengeObj.createdBy._id.toString();
+    }
+  }
+  
+  // Handle participants
+  if (challengeObj.participants && userId) {
+    challengeObj.participants = challengeObj.participants.map(p => {
+      const participantObj = p.toObject ? p.toObject() : p;
+      
+      // Ensure participant has id field
+      if (!participantObj.id && participantObj._id) {
+        participantObj.id = participantObj._id.toString();
+      }
+      
+      // Ensure user has id field if it exists
+      if (participantObj.user) {
+        if (participantObj.user._id && !participantObj.user.id) {
+          participantObj.user.id = participantObj.user._id.toString();
+        }
+      }
+      
+      return {
+        ...participantObj,
+        isCurrentUser: participantObj.user && participantObj.user._id ? 
+          participantObj.user._id.toString() === userId.toString() : false
+      };
+    });
+  }
+  
+  return challengeObj;
+};
+
 export const resolvers = {
   Date: dateScalar,
 
@@ -120,10 +165,9 @@ export const resolvers = {
         extensions: { code: 'UNAUTHENTICATED' }
       });
       
-      // Check and activate any pending challenges first
       await activatePendingChallenges();
     
-      return await challengeModel.find({
+      const challenges = await challengeModel.find({
         participants: {
           $elemMatch: {
             user: userId,
@@ -133,6 +177,9 @@ export const resolvers = {
       })
       .populate('participants.user', 'displayName email avatarUrl')
       .populate('createdBy', 'displayName email avatarUrl');
+      
+      // Add isCurrentUser field
+      return challenges.map(challenge => addIsCurrentUserToParticipants(challenge, userId));
     },
 
     timelineMedia: async (_, __, { userId }) => {
@@ -189,14 +236,16 @@ export const resolvers = {
         extensions: { code: 'UNAUTHENTICATED' }
       });
       
-      // Check and activate any pending challenges that should be active
       await activatePendingChallenges();
     
-      return await challengeModel.find({
+      const challenges = await challengeModel.find({
         'participants.user': userId
       })
       .populate('participants.user', 'displayName email avatarUrl')
       .populate('createdBy', 'displayName email avatarUrl');
+      
+      // Add isCurrentUser field
+      return challenges.map(challenge => addIsCurrentUserToParticipants(challenge, userId));
     },
     
     challenge: async (_, { id }, { userId }) => {
@@ -216,8 +265,9 @@ export const resolvers = {
         });
       }
     
-      return challenge;
-    },    
+      // Add isCurrentUser field
+      return addIsCurrentUserToParticipants(challenge, userId);
+    },   
   },
 
   Mutation: {
@@ -239,7 +289,6 @@ export const resolvers = {
     
       const { title, sport, type, startDate, timeLimit, wager, participantIds } = input;
     
-      // Validate dates
       const start = new Date(startDate);
       const end = new Date(timeLimit);
       
@@ -249,7 +298,6 @@ export const resolvers = {
         });
       }
     
-      // Build participants array with creator ID
       const participants = await buildParticipantsArray(participantIds, mongoUser._id); 
     
       const challenge = await challengeModel.create({
@@ -261,19 +309,18 @@ export const resolvers = {
         wager,
         createdBy: mongoUser._id, 
         participants,
-        status: 'pending', // Start as pending until start date
+        status: 'pending',
         createdAt: new Date()
       });
       
-      // Check if should be active immediately (if start date is today/past)
       challenge.checkAndUpdateStatus();
       await challenge.save();
       
-      // Populate before returning
       await challenge.populate('participants.user', 'displayName email avatarUrl');
       await challenge.populate('createdBy', 'displayName email avatarUrl');
     
-      return challenge;
+      // Add isCurrentUser field
+      return addIsCurrentUserToParticipants(challenge, userId);
     },
 
     updateProgress: async (_, { challengeId, progress }, { userId }) => {
@@ -344,16 +391,14 @@ export const resolvers = {
       }
 
       await challenge.save();
-
-      // Populate the user field before returning
       await challenge.populate('participants.user', 'displayName email avatarUrl');
 
-      const updatedParticipant = challenge.participants.find(
+      const updatedChallenge = addIsCurrentUserToParticipants(challenge, userId);
+      const updatedParticipant = updatedChallenge.participants.find(
         p => p.user._id.toString() === userId.toString()
       );
 
-      // Publish update to subscribers
-      pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
+      pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: updatedChallenge });
 
       return updatedParticipant;
     },
@@ -638,12 +683,16 @@ export const resolvers = {
 
   Subscription: {
     challengeUpdated: {
-      subscribe: () => pubsub.asyncIterator([CHALLENGE_UPDATED])
-    },
+      subscribe: () => pubsub.asyncIterator([CHALLENGE_UPDATED]),
+      resolve: (payload, _, { userId }) => {
+        // Add isCurrentUser field to subscription updates
+        return addIsCurrentUserToParticipants(payload.challengeUpdated, userId);
+      },
     mediaAdded: {
       subscribe: (_, { challengeId }) => pubsub.asyncIterator([`${MEDIA_ADDED}_${challengeId}`]),
       resolve: (payload) => payload.mediaAdded
-    }
+      }
+    },
   },
 
   Media: {
@@ -670,4 +719,5 @@ export const resolvers = {
       );
     }
   },
-};
+}
+
