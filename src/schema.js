@@ -158,6 +158,7 @@ export const typeDefs = gql`#graphql
     createUser(input: CreateUserInput!): User!
     createChallenge(input: CreateChallengeInput!): Challenge!
     acceptChallenge(challengeId: ID!, restDays: Int!): Participant!
+    declineChallenge(challengeId: ID!, reason: String): Boolean!
     updateProgress(challengeId: ID!, progress: Float!): Participant!
     addParticipantMedia(input: AddParticipantMediaInput!): Media!
     addMedia(input: AddMediaInput!): Media!
