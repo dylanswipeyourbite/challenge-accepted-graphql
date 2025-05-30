@@ -92,6 +92,7 @@ export const typeDefs = gql`#graphql
     title: String!
     sport: Sport!
     type: ChallengeType!
+    startDate: Date!
     timeLimit: Date!
     wager: String
     createdBy: User!
@@ -179,6 +180,7 @@ export const typeDefs = gql`#graphql
     title: String!
     sport: Sport!
     type: ChallengeType!
+    startDate: Date!
     timeLimit: Date!
     wager: String
     participantIds: [String!]!

@@ -5,6 +5,7 @@ import { mediaModel } from './models/Media.js';
 import { GraphQLScalarType, Kind, GraphQLError } from 'graphql';
 import { buildParticipantsArray } from './utils/buildParticipantsArray.js';
 import { getUserActivitySummary } from './utils/getUserActivitySummary.js';
+import { activatePendingChallenges } from './utils/activatePendingChallenges.js';
 import { dailyLogModel } from './models/DailyLog.js';
 
 const pubsub = new PubSub();
@@ -109,6 +110,9 @@ export const resolvers = {
       if (!userId) throw new GraphQLError('Not authenticated', {
         extensions: { code: 'UNAUTHENTICATED' }
       });
+      
+      // Check and activate any pending challenges first
+      await activatePendingChallenges();
     
       return await challengeModel.find({
         participants: {
@@ -120,7 +124,7 @@ export const resolvers = {
       })
       .populate('participants.user', 'displayName email avatarUrl')
       .populate('createdBy', 'displayName email avatarUrl');
-    },    
+    },
 
     timelineMedia: async (_, __, { userId }) => {
       if (!userId) throw new GraphQLError('Not authenticated');
@@ -172,11 +176,12 @@ export const resolvers = {
     },
       
     challenges: async (_, __, { userId }) => {
-      console.log('test');
-      console.log(userId);
       if (!userId) throw new GraphQLError('Not authenticated', {
         extensions: { code: 'UNAUTHENTICATED' }
       });
+      
+      // Check and activate any pending challenges that should be active
+      await activatePendingChallenges();
     
       return await challengeModel.find({
         'participants.user': userId
@@ -217,35 +222,50 @@ export const resolvers = {
       return user;
     },
 
-  createChallenge: async (_, { input }, { userId }) => {
-    if (!userId) throw new Error('Not authenticated');
+    createChallenge: async (_, { input }, { userId }) => {
+      if (!userId) throw new Error('Not authenticated');
+      
+      const mongoUser = await userModel.findById(userId);
+      if (!mongoUser) throw new Error('User not found');
     
-    const mongoUser = await userModel.findById(userId);
-    if (!mongoUser) throw new Error('User not found');
-
-    const { title, sport, type, timeLimit, wager, participantIds } = input;
-
-    // Build participants array with creator ID
-    const participants = await buildParticipantsArray(participantIds, mongoUser._id); 
-
-    const challenge = await challengeModel.create({
-      title,
-      sport,
-      type,
-      timeLimit,
-      wager,
-      createdBy: mongoUser._id, 
-      participants,
-      status: 'pending', // Start as pending until all accept
-      createdAt: new Date()
-    });
+      const { title, sport, type, startDate, timeLimit, wager, participantIds } = input;
     
-    // Populate before returning
-    await challenge.populate('participants.user', 'displayName email avatarUrl');
-    await challenge.populate('createdBy', 'displayName email avatarUrl');
-
-    return challenge;
-  },
+      // Validate dates
+      const start = new Date(startDate);
+      const end = new Date(timeLimit);
+      
+      if (start >= end) {
+        throw new GraphQLError('End date must be after start date', {
+          extensions: { code: 'BAD_USER_INPUT' }
+        });
+      }
+    
+      // Build participants array with creator ID
+      const participants = await buildParticipantsArray(participantIds, mongoUser._id); 
+    
+      const challenge = await challengeModel.create({
+        title,
+        sport,
+        type,
+        startDate: start,
+        timeLimit: end,
+        wager,
+        createdBy: mongoUser._id, 
+        participants,
+        status: 'pending', // Start as pending until start date
+        createdAt: new Date()
+      });
+      
+      // Check if should be active immediately (if start date is today/past)
+      challenge.checkAndUpdateStatus();
+      await challenge.save();
+      
+      // Populate before returning
+      await challenge.populate('participants.user', 'displayName email avatarUrl');
+      await challenge.populate('createdBy', 'displayName email avatarUrl');
+    
+      return challenge;
+    },
 
     updateProgress: async (_, { challengeId, progress }, { userId }) => {
       const challenge = await challengeModel.findById(challengeId);
@@ -261,228 +281,229 @@ export const resolvers = {
       return participant;
     },
 
-      acceptChallenge: async (_, { challengeId, restDays }, { userId }) => {
-        if (!userId) throw new Error('Not authenticated');
-        if (restDays < 0 || restDays > 6) {
-          throw new GraphQLError('Rest days must be between 0 and 6', {
-            extensions: { code: 'BAD_USER_INPUT' }
-          });
-        }
+    acceptChallenge: async (_, { challengeId, restDays }, { userId }) => {
+      if (!userId) throw new Error('Not authenticated');
+      if (restDays < 0 || restDays > 6) {
+        throw new GraphQLError('Rest days must be between 0 and 6', {
+          extensions: { code: 'BAD_USER_INPUT' }
+        });
+      }
 
-        const challenge = await challengeModel.findById(challengeId);
-        if (!challenge) {
-          throw new GraphQLError('Challenge not found', {
-            extensions: { code: 'NOT_FOUND' }
-          });
-        }
-
-        const participant = challenge.participants.find(
-          p => p.user.toString() === userId.toString()
-        );
-
-        if (!participant) {
-          throw new GraphQLError('You were not invited to this challenge', {
-            extensions: { code: 'FORBIDDEN' }
-          });
-        }
-
-        if (participant.status === 'accepted') {
-          throw new GraphQLError('You already accepted this challenge', {
-            extensions: { code: 'ALREADY_EXISTS' }
-          });
-        }
-
-        // Update participant with restDays and accept status
-        participant.status = 'accepted';
-        participant.restDays = restDays;
-        participant.joinedAt = new Date();
-
-        // Check if all participants have responded
-        const allParticipantsResponded = challenge.participants.every(
-          p => p.status === 'accepted' || p.status === 'rejected'
-        );
-
-        // If all participants have accepted, activate the challenge
-        const allParticipantsAccepted = challenge.participants.every(
-          p => p.status === 'accepted'
-        );
-
-        if (allParticipantsAccepted) {
-          challenge.status = 'active';
-        } else if (allParticipantsResponded) {
-          // If some rejected but all have responded, expire the challenge
-          challenge.status = 'expired';
-        }
-
-        await challenge.save();
-
-        // Populate the user field before returning
-        await challenge.populate('participants.user', 'displayName email avatarUrl');
-
-        const updatedParticipant = challenge.participants.find(
-          p => p.user._id.toString() === userId.toString()
-        );
-
-        // Publish update to subscribers
-        pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
-
-        return updatedParticipant;
-      },
-
-      declineChallenge: async (_, { challengeId, reason }, { userId }) => {
-        if (!userId) throw new Error('Not authenticated');
-
-        const challenge = await challengeModel.findById(challengeId);
-        if (!challenge) {
-          throw new GraphQLError('Challenge not found', {
-            extensions: { code: 'NOT_FOUND' }
-          });
-        }
-
-        const participant = challenge.participants.find(
-          p => p.user.toString() === userId.toString()
-        );
-
-        if (!participant) {
-          throw new GraphQLError('You were not invited to this challenge', {
-            extensions: { code: 'FORBIDDEN' }
-          });
-        }
-
-        if (participant.status !== 'pending') {
-          throw new GraphQLError('You have already responded to this challenge', {
-            extensions: { code: 'ALREADY_EXISTS' }
-          });
-        }
-
-        // Update participant status to rejected
-        participant.status = 'rejected';
-        participant.rejectedAt = new Date();
-        participant.rejectionReason = reason;
-
-        // Check if all participants have responded
-        const allParticipantsResponded = challenge.participants.every(
-          p => p.status === 'accepted' || p.status === 'rejected'
-        );
-
-        if (allParticipantsResponded) {
-          // Check if at least 2 participants accepted (for a valid challenge)
-          const acceptedCount = challenge.participants.filter(
-            p => p.status === 'accepted'
-          ).length;
-
-          if (acceptedCount >= 2) {
-            challenge.status = 'active';
-          } else {
-            challenge.status = 'expired';
-          }
-        }
-
-        await challenge.save();
-
-        // Publish update to subscribers
-        pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
-
-        return true;
-      },
-      logDailyActivity: async (_, { input }, { userId }) => {
-      if (!userId) throw new GraphQLError('Not authenticated');
-
-      const { challengeId, type, activityType, notes, date } = input;
-      
-      // Get the challenge and participant
       const challenge = await challengeModel.findById(challengeId);
-      if (!challenge) throw new GraphQLError('Challenge not found');
+      if (!challenge) {
+        throw new GraphQLError('Challenge not found', {
+          extensions: { code: 'NOT_FOUND' }
+        });
+      }
 
       const participant = challenge.participants.find(
         p => p.user.toString() === userId.toString()
       );
-      if (!participant) throw new GraphQLError('Not a participant in this challenge');
 
-      // Check if already logged today
-      const today = new Date(date);
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-
-      const existingLog = await dailyLogModel.findOne({
-        challengeId,
-        user: userId,
-        date: { $gte: today, $lt: tomorrow }
-      });
-
-      if (existingLog) {
-        throw new GraphQLError('Already logged activity for today');
-      }
-
-      // Calculate points based on type
-      let points = 0;
-      if (type === 'activity') {
-        points = 10;
-      } else if (type === 'rest') {
-        // Check if user has rest days available
-        const weekStart = getWeekStart(today);
-        const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekEnd.getDate() + 7);
-
-        const restDaysThisWeek = await dailyLogModel.countDocuments({
-          challengeId,
-          user: userId,
-          type: 'rest',
-          date: { $gte: weekStart, $lt: weekEnd }
+      if (!participant) {
+        throw new GraphQLError('You were not invited to this challenge', {
+          extensions: { code: 'FORBIDDEN' }
         });
-
-        if (restDaysThisWeek >= participant.restDays) {
-          throw new GraphQLError('No rest days remaining this week');
-        }
-
-        points = 5;
       }
 
-      // Create the daily log
-      const dailyLog = await dailyLogModel.create({
-        challengeId,
-        participantId: participant._id,
-        user: userId,
-        type,
-        activityType,
-        notes,
-        date: today,
-        points
-      });
+      if (participant.status === 'accepted') {
+        throw new GraphQLError('You already accepted this challenge', {
+          extensions: { code: 'ALREADY_EXISTS' }
+        });
+      }
 
-      // Update participant stats
-      participant.totalPoints = (participant.totalPoints || 0) + points;
-      participant.lastLogDate = today;
-      
-      // Update streak
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      
-      const loggedYesterday = await dailyLogModel.findOne({
-        challengeId,
-        user: userId,
-        date: { $gte: yesterday, $lt: today }
-      });
+      // Update participant with restDays and accept status
+      participant.status = 'accepted';
+      participant.restDays = restDays;
+      participant.joinedAt = new Date();
 
-      if (loggedYesterday || participant.dailyStreak === 0) {
-        participant.dailyStreak = (participant.dailyStreak || 0) + 1;
-      } else {
-        participant.dailyStreak = 1; // Reset streak if gap found
+      // Check if all participants have responded
+      const allParticipantsResponded = challenge.participants.every(
+        p => p.status === 'accepted' || p.status === 'rejected'
+      );
+
+      // If all participants have accepted, activate the challenge
+      const allParticipantsAccepted = challenge.participants.every(
+        p => p.status === 'accepted'
+      );
+
+      if (allParticipantsAccepted) {
+        challenge.status = 'active';
+      } else if (allParticipantsResponded) {
+        // If some rejected but all have responded, expire the challenge
+        challenge.status = 'expired';
       }
 
       await challenge.save();
 
-      // 🔔 Publish challenge update for real-time sync
+      // Populate the user field before returning
+      await challenge.populate('participants.user', 'displayName email avatarUrl');
+
+      const updatedParticipant = challenge.participants.find(
+        p => p.user._id.toString() === userId.toString()
+      );
+
+      // Publish update to subscribers
       pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
 
-      return {
-        ...dailyLog.toObject(),
-        participant: {
-          dailyStreak: participant.dailyStreak,
-          totalPoints: participant.totalPoints
+      return updatedParticipant;
+    },
+
+    declineChallenge: async (_, { challengeId, reason }, { userId }) => {
+      if (!userId) throw new Error('Not authenticated');
+
+      const challenge = await challengeModel.findById(challengeId);
+      if (!challenge) {
+        throw new GraphQLError('Challenge not found', {
+          extensions: { code: 'NOT_FOUND' }
+        });
+      }
+
+      const participant = challenge.participants.find(
+        p => p.user.toString() === userId.toString()
+      );
+
+      if (!participant) {
+        throw new GraphQLError('You were not invited to this challenge', {
+          extensions: { code: 'FORBIDDEN' }
+        });
+      }
+
+      if (participant.status !== 'pending') {
+        throw new GraphQLError('You have already responded to this challenge', {
+          extensions: { code: 'ALREADY_EXISTS' }
+        });
+      }
+
+      // Update participant status to rejected
+      participant.status = 'rejected';
+      participant.rejectedAt = new Date();
+      participant.rejectionReason = reason;
+
+      // Check if all participants have responded
+      const allParticipantsResponded = challenge.participants.every(
+        p => p.status === 'accepted' || p.status === 'rejected'
+      );
+
+      if (allParticipantsResponded) {
+        // Check if at least 2 participants accepted (for a valid challenge)
+        const acceptedCount = challenge.participants.filter(
+          p => p.status === 'accepted'
+        ).length;
+
+        if (acceptedCount >= 2) {
+          challenge.status = 'active';
+        } else {
+          challenge.status = 'expired';
         }
-      };
+      }
+
+      await challenge.save();
+
+      // Publish update to subscribers
+      pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
+
+      return true;
+    },
+
+    logDailyActivity: async (_, { input }, { userId }) => {
+    if (!userId) throw new GraphQLError('Not authenticated');
+
+    const { challengeId, type, activityType, notes, date } = input;
+    
+    // Get the challenge and participant
+    const challenge = await challengeModel.findById(challengeId);
+    if (!challenge) throw new GraphQLError('Challenge not found');
+
+    const participant = challenge.participants.find(
+      p => p.user.toString() === userId.toString()
+    );
+    if (!participant) throw new GraphQLError('Not a participant in this challenge');
+
+    // Check if already logged today
+    const today = new Date(date);
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const existingLog = await dailyLogModel.findOne({
+      challengeId,
+      user: userId,
+      date: { $gte: today, $lt: tomorrow }
+    });
+
+    if (existingLog) {
+      throw new GraphQLError('Already logged activity for today');
+    }
+
+    // Calculate points based on type
+    let points = 0;
+    if (type === 'activity') {
+      points = 10;
+    } else if (type === 'rest') {
+      // Check if user has rest days available
+      const weekStart = getWeekStart(today);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
+
+      const restDaysThisWeek = await dailyLogModel.countDocuments({
+        challengeId,
+        user: userId,
+        type: 'rest',
+        date: { $gte: weekStart, $lt: weekEnd }
+      });
+
+      if (restDaysThisWeek >= participant.restDays) {
+        throw new GraphQLError('No rest days remaining this week');
+      }
+
+      points = 5;
+    }
+
+    // Create the daily log
+    const dailyLog = await dailyLogModel.create({
+      challengeId,
+      participantId: participant._id,
+      user: userId,
+      type,
+      activityType,
+      notes,
+      date: today,
+      points
+    });
+
+    // Update participant stats
+    participant.totalPoints = (participant.totalPoints || 0) + points;
+    participant.lastLogDate = today;
+    
+    // Update streak
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    const loggedYesterday = await dailyLogModel.findOne({
+      challengeId,
+      user: userId,
+      date: { $gte: yesterday, $lt: today }
+    });
+
+    if (loggedYesterday || participant.dailyStreak === 0) {
+      participant.dailyStreak = (participant.dailyStreak || 0) + 1;
+    } else {
+      participant.dailyStreak = 1; // Reset streak if gap found
+    }
+
+    await challenge.save();
+
+    // 🔔 Publish challenge update for real-time sync
+    pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
+
+    return {
+      ...dailyLog.toObject(),
+      participant: {
+        dailyStreak: participant.dailyStreak,
+        totalPoints: participant.totalPoints
+      }
+    };
     },
 
     addMedia: async (_, { input }, { userId }) => {
@@ -594,8 +615,6 @@ export const resolvers = {
         author: saved.author
       };
     },
-
-
   },
 
   Subscription: {

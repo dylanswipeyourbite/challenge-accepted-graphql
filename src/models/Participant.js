@@ -1,4 +1,4 @@
-// In Participant.js - Make sure the media field has proper defaults
+// Updated participantSchema in src/models/Participant.js
 
 import mongoose from 'mongoose';
 import { mediaSchema } from './Media.js';
@@ -37,7 +37,7 @@ export const participantSchema = new mongoose.Schema({
   },
   media: {
     type: [mediaSchema],
-    default: []  // Explicitly set default to empty array
+    default: []
   },
   dailyStreak: { 
     type: Number, 
@@ -46,11 +46,18 @@ export const participantSchema = new mongoose.Schema({
   lastPostDate: { 
     type: Date 
   },
+  lastLogDate: {  // NEW: Track when user last logged activity
+    type: Date
+  },
   totalPoints: {
+    type: Number,
+    default: 0
+  },
+  weeklyRestDaysUsed: {  // NEW: Track rest days used this week
     type: Number,
     default: 0
   }
 });
 
-// ✅ Safe export to prevent OverwriteModelError
+// Export the model
 export const participantModel = mongoose.models.Participant || mongoose.model('Participant', participantSchema);
