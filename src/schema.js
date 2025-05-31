@@ -100,6 +100,22 @@ export const typeDefs = gql`#graphql
     participants: [Participant!]!
     createdAt: Date
     status: ChallengeStatus
+    challengeStreak: Int!  # NEW
+    lastCompleteLogDate: Date  # NEW
+    todayStatus: ChallengeTodayStatus!  # NEW
+  }
+
+  type ChallengeTodayStatus {
+    allParticipantsLogged: Boolean!
+    participantsLoggedCount: Int!
+    totalParticipants: Int!
+    participantsStatus: [ParticipantDailyStatus!]!
+  }
+
+  type ParticipantDailyStatus {
+    participant: Participant!
+    hasLoggedToday: Boolean!
+    lastLogTime: Date
   }
 
   enum Sport {

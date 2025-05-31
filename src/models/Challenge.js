@@ -15,10 +15,49 @@ const challengeSchema = new mongoose.Schema({
   participants: [participantSchema],
 
   createdAt: { type: Date, default: Date.now },
-  status: { type: String, enum: ['active', 'pending', 'completed', 'expired'], default: 'pending' }
+  status: { type: String, enum: ['active', 'pending', 'completed', 'expired'], default: 'pending' },
+  challengeStreak: { 
+    type: Number, 
+    default: 0 
+  },
+  lastCompleteLogDate: { 
+    type: Date 
+  },
 });
 
-// Add a method to check if challenge should be active based on start date
+// Add method to update challenge streak
+challengeSchema.methods.updateChallengeStreak = async function() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const allLogged = await this.checkDailyCompletion();
+  
+  if (allLogged) {
+    // Check if this is consecutive
+    if (this.lastCompleteLogDate) {
+      const lastLog = new Date(this.lastCompleteLogDate);
+      lastLog.setHours(0, 0, 0, 0);
+      
+      const dayDiff = Math.floor((today - lastLog) / (1000 * 60 * 60 * 24));
+      
+      if (dayDiff === 1) {
+        // Consecutive day
+        this.challengeStreak += 1;
+      } else if (dayDiff > 1) {
+        // Streak broken
+        this.challengeStreak = 1;
+      }
+      // If dayDiff === 0, already counted today
+    } else {
+      // First complete day
+      this.challengeStreak = 1;
+    }
+    
+    this.lastCompleteLogDate = today;
+    await this.save();
+  }
+};
+
 challengeSchema.methods.checkAndUpdateStatus = function() {
   const now = new Date();
   

@@ -40,7 +40,6 @@ function getWeekStart(date) {
 }
 
 // Helper function to add isCurrentUser to participants
-// Helper function to add isCurrentUser to participants
 const addIsCurrentUserToParticipants = (challenge, userId) => {
   const challengeObj = challenge.toObject ? challenge.toObject() : challenge;
   
@@ -84,6 +83,65 @@ const addIsCurrentUserToParticipants = (challenge, userId) => {
   return challengeObj;
 };
 
+// Helper function to update challenge streak manually
+async function updateChallengeStreakManually(challengeId) {
+  const challenge = await challengeModel.findById(challengeId);
+  if (!challenge) return;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  // Get all accepted participants
+  const acceptedParticipants = challenge.participants.filter(p => p.status === 'accepted');
+  
+  if (acceptedParticipants.length === 0) return; // No accepted participants
+  
+  // Check if all participants have logged today
+  let allLogged = true;
+  for (const participant of acceptedParticipants) {
+    const todayLog = await dailyLogModel.findOne({
+      challengeId: challenge._id,
+      user: participant.user,
+      date: { $gte: today, $lt: tomorrow }
+    });
+    
+    if (!todayLog) {
+      allLogged = false;
+      break;
+    }
+  }
+
+  if (allLogged) {
+    // Check if we already counted today
+    if (challenge.lastCompleteLogDate) {
+      const lastLog = new Date(challenge.lastCompleteLogDate);
+      lastLog.setHours(0, 0, 0, 0);
+      
+      const dayDiff = Math.floor((today.getTime() - lastLog.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (dayDiff === 0) {
+        // Already counted today, don't increment
+        return;
+      } else if (dayDiff === 1) {
+        // Consecutive day
+        challenge.challengeStreak = (challenge.challengeStreak || 0) + 1;
+      } else {
+        // Streak broken, reset to 1
+        challenge.challengeStreak = 1;
+      }
+    } else {
+      // First complete day
+      challenge.challengeStreak = 1;
+    }
+    
+    challenge.lastCompleteLogDate = today;
+    await challenge.save();
+    
+    console.log(`Challenge ${challengeId} streak updated to: ${challenge.challengeStreak}`);
+  }
+}
 export const resolvers = {
   Date: dateScalar,
 
@@ -465,7 +523,7 @@ export const resolvers = {
     
       const { challengeId, type, activityType, notes, date } = input;
       
-      // Get the challenge and participant
+      // Get the challenge - DON'T use .lean() here
       const challenge = await challengeModel.findById(challengeId);
       if (!challenge) throw new GraphQLError('Challenge not found');
     
@@ -546,14 +604,22 @@ export const resolvers = {
         participant.dailyStreak = 1; // Reset streak if gap found
       }
     
+      // Save the challenge with updated participant
       await challenge.save();
     
-      // 🔔 Publish challenge update for real-time sync
-      pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challenge });
+      // Update challenge streak
+      await updateChallengeStreakManually(challenge._id);
     
-      // ✅ FIX: Return the dailyLog with proper id field
+      // 🔔 Publish challenge update for real-time sync
+      const updatedChallenge = await challengeModel.findById(challengeId)
+        .populate('participants.user', 'displayName email avatarUrl');
+        
+      const challengeWithCurrentUser = addIsCurrentUserToParticipants(updatedChallenge, userId);
+      pubsub.publish(CHALLENGE_UPDATED, { challengeUpdated: challengeWithCurrentUser });
+    
+      // Return the dailyLog with proper id field
       return {
-        id: dailyLog._id.toString(), // Convert MongoDB _id to string
+        id: dailyLog._id.toString(),
         challengeId: dailyLog.challengeId.toString(),
         participantId: dailyLog.participantId.toString(),
         user: dailyLog.user.toString(),
@@ -717,6 +783,44 @@ export const resolvers = {
       return challenge.participants.find(
         p => p._id.toString() === dailyLog.participantId.toString()
       );
+    }
+  },
+
+  Challenge: {
+    todayStatus: async (challenge, _, { userId }) => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      const acceptedParticipants = challenge.participants.filter(
+        p => p.status === 'accepted'
+      );
+      
+      const participantsStatus = await Promise.all(
+        acceptedParticipants.map(async (participant) => {
+          const todayLog = await dailyLogModel.findOne({
+            challengeId: challenge._id,
+            user: participant.user._id || participant.user,
+            date: { $gte: today, $lt: tomorrow }
+          });
+          
+          return {
+            participant,
+            hasLoggedToday: !!todayLog,
+            lastLogTime: todayLog?.createdAt || null
+          };
+        })
+      );
+      
+      const loggedCount = participantsStatus.filter(p => p.hasLoggedToday).length;
+      
+      return {
+        allParticipantsLogged: loggedCount === acceptedParticipants.length,
+        participantsLoggedCount: loggedCount,
+        totalParticipants: acceptedParticipants.length,
+        participantsStatus
+      };
     }
   },
 }
