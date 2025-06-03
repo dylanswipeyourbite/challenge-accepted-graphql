@@ -1,6 +1,19 @@
+import { dailyLogModel } from '../models/DailyLog.js';
+import { challengeModel } from '../models/Challenge.js';
+
+// Add the getWeekStart function
+function getWeekStart(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day; // Adjust to get Sunday as start of week
+  const weekStart = new Date(d.setDate(diff));
+  weekStart.setHours(0, 0, 0, 0);
+  return weekStart;
+}
+
 export const getUserActivitySummary = async (userId) => {
     const today = new Date();
-    const weekStart = weekStart(today);
+    const weekStart = getWeekStart(today);
     
     // Get this week's logs
     const weeklyLogs = await dailyLogModel.find({
