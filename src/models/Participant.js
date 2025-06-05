@@ -59,5 +59,15 @@ export const participantSchema = new mongoose.Schema({
   }
 });
 
+// Add virtual for id field
+participantSchema.virtual('id').get(function() {
+  return this._id.toHexString();
+});
+
+// Ensure virtual fields are serialized
+participantSchema.set('toJSON', {
+  virtuals: true
+});
+
 // Export the model
 export const participantModel = mongoose.models.Participant || mongoose.model('Participant', participantSchema);

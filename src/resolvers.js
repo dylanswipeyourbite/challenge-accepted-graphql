@@ -39,7 +39,9 @@ function getWeekStart(date) {
   return weekStart;
 }
 
-// Helper function to add isCurrentUser to participants
+// Add this to the resolvers.js file
+
+// Helper function to add isCurrentUser and id to participants
 const addIsCurrentUserToParticipants = (challenge, userId) => {
   const challengeObj = challenge.toObject ? challenge.toObject() : challenge;
   
@@ -74,6 +76,7 @@ const addIsCurrentUserToParticipants = (challenge, userId) => {
       
       return {
         ...participantObj,
+        id: participantObj.id || participantObj._id?.toString() || '',
         isCurrentUser: participantObj.user && participantObj.user._id ? 
           participantObj.user._id.toString() === userId.toString() : false
       };
