@@ -23,6 +23,52 @@ const challengeSchema = new mongoose.Schema({
   lastCompleteLogDate: { 
     type: Date 
   },
+
+   // NEW FIELDS for enhanced creation
+   description: { type: String, required: true },
+   rules: { type: String },
+   minWeeklyActivities: { type: Number, default: 4 },
+   minPointsToJoin: { type: Number, default: 0 },
+   allowedActivities: {
+     type: [String],
+     enum: ['running', 'cycling', 'workout', 'other'],
+     default: ['running', 'cycling', 'workout', 'other']
+   },
+   requireDailyPhoto: { type: Boolean, default: false },
+   template: { type: String },
+   
+   // Notification preferences
+   enableReminders: { type: Boolean, default: true },
+   reminderTime: { type: String, default: '08:00' },
+   
+   // Creator's rest days
+   creatorRestDays: { type: Number, default: 1 },
+   
+   // Badges earned in this challenge
+   earnedBadges: [{
+     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+     badgeType: String,
+     earnedAt: Date
+   }],
+   
+   milestones: [{
+     id: { type: String, required: true },
+     title: { type: String, required: true },
+     description: String,
+     targetValue: Number, // e.g., 100 points, 7 days streak
+     type: {
+       type: String,
+       enum: ['points', 'streak', 'activities', 'custom'],
+       required: true
+     },
+     icon: String,
+     reward: String, // Description of reward
+     achievedBy: [{
+       userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+       achievedAt: Date
+     }],
+     createdAt: { type: Date, default: Date.now }
+   }]
 });
 
 // Add method to update challenge streak

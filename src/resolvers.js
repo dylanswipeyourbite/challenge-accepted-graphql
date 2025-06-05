@@ -7,6 +7,13 @@ import { buildParticipantsArray } from './utils/buildParticipantsArray.js';
 import { getUserActivitySummary } from './utils/getUserActivitySummary.js';
 import { activatePendingChallenges } from './utils/activatePendingChallenges.js';
 import { dailyLogModel } from './models/DailyLog.js';
+import { challengeModel } from './models/Challenge.js';
+import { chatMessageModel } from './models/ChatMessage.js';
+import { badgeModel } from './models/Badge.js';
+import { notificationModel } from './models/Notification.js';
+import { milestoneService } from './services/milestoneService.js';
+import { analyticsService } from './services/analyticsService.js';
+import { notificationService } from './services/notificationService.js';
 
 const pubsub = new PubSub();
 
@@ -328,7 +335,107 @@ export const resolvers = {
     
       // Add isCurrentUser field
       return addIsCurrentUserToParticipants(challenge, userId);
-    },   
+    },
+    
+    challengeAnalytics: async (_, { challengeId }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      // Verify user is participant
+      const challenge = await challengeModel.findById(challengeId);
+      const isParticipant = challenge?.participants.some(
+        p => p.user.toString() === userId.toString()
+      );
+      
+      if (!isParticipant) {
+        throw new GraphQLError('Not a participant in this challenge');
+      }
+      
+      return await analyticsService.getChallengeAnalytics(challengeId, userId);
+    },
+
+    chatMessages: async (_, { challengeId, limit = 50, before }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const query = { challengeId };
+      if (before) {
+        query.createdAt = { $lt: new Date(before) };
+      }
+      
+      return await chatMessageModel
+        .find(query)
+        .populate('user', 'displayName avatarUrl')
+        .populate('reactions.user', 'displayName avatarUrl')
+        .sort({ createdAt: -1 })
+        .limit(limit);
+    },
+
+    availableBadges: async () => {
+      return await badgeModel.find({});
+    },
+
+    userBadges: async (_, { userId }) => {
+      const user = await userModel.findById(userId)
+        .populate('badges.badge');
+      
+      return user.badges || [];
+    },
+
+    challengeTemplates: async () => {
+      return ChallengeTemplates.getAll();
+    },
+
+    userNotifications: async (_, { limit = 20, unreadOnly }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const query = { userId };
+      if (unreadOnly) {
+        query.read = false;
+      }
+      
+      return await notificationModel
+        .find(query)
+        .sort({ createdAt: -1 })
+        .limit(limit);
+    },
+
+    challengeCalendarData: async (_, { challengeId, startDate, endDate }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const logs = await dailyLogModel.find({
+        challengeId,
+        date: { $gte: startDate, $lte: endDate }
+      });
+      
+      const challenge = await challengeModel.findById(challengeId);
+      const milestoneAchievements = [];
+      
+      // Get milestone achievements in date range
+      for (const milestone of challenge.milestones) {
+        const achievements = milestone.achievedBy.filter(
+          a => a.achievedAt >= startDate && a.achievedAt <= endDate
+        );
+        milestoneAchievements.push(...achievements);
+      }
+      
+      // Calculate missed days
+      const missedDays = [];
+      const current = new Date(startDate);
+      while (current <= endDate) {
+        const hasLog = logs.some(
+          log => log.date.toDateString() === current.toDateString()
+        );
+        if (!hasLog) {
+          missedDays.push(new Date(current));
+        }
+        current.setDate(current.getDate() + 1);
+      }
+      
+      return {
+        dailyLogs: logs,
+        milestoneAchievements,
+        missedDays
+      };
+    }
   },
 
   Mutation: {
@@ -343,13 +450,32 @@ export const resolvers = {
     },
 
     createChallenge: async (_, { input }, { userId }) => {
-      if (!userId) throw new Error('Not authenticated');
+      if (!userId) throw new GraphQLError('Not authenticated');
       
       const mongoUser = await userModel.findById(userId);
-      if (!mongoUser) throw new Error('User not found');
-    
-      const { title, sport, type, startDate, timeLimit, wager, participantIds } = input;
-    
+      if (!mongoUser) throw new GraphQLError('User not found');
+      
+      const {
+        title,
+        description = '', // Default empty if not provided
+        rules = '',
+        sport,
+        type,
+        startDate,
+        timeLimit,
+        minWeeklyActivities = 4, // Default values
+        minPointsToJoin = 0,
+        allowedActivities = ['running', 'cycling', 'workout', 'other'],
+        requireDailyPhoto = false,
+        creatorRestDays = 1,
+        participantIds,
+        wager,
+        template,
+        milestones = [],
+        enableReminders = true
+      } = input;
+      
+      // Validate dates
       const start = new Date(startDate);
       const end = new Date(timeLimit);
       
@@ -358,28 +484,65 @@ export const resolvers = {
           extensions: { code: 'BAD_USER_INPUT' }
         });
       }
-    
-      const participants = await buildParticipantsArray(participantIds, mongoUser._id); 
-    
+      
+      // Build participants array with creator's rest days
+      const participants = await buildParticipantsArray(participantIds, mongoUser._id);
+      participants[0].restDays = creatorRestDays; // Creator is always first
+      
+      // Create milestones with IDs
+      const challengeMilestones = milestones.map(m => ({
+        id: new mongoose.Types.ObjectId().toString(),
+        ...m,
+        achievedBy: [],
+        createdAt: new Date()
+      }));
+      
+      // Create challenge
       const challenge = await challengeModel.create({
         title,
+        description,
+        rules,
         sport,
         type,
         startDate: start,
         timeLimit: end,
+        minWeeklyActivities,
+        minPointsToJoin,
+        allowedActivities,
+        requireDailyPhoto,
+        creatorRestDays,
         wager,
-        createdBy: mongoUser._id, 
+        template,
+        createdBy: mongoUser._id,
         participants,
+        milestones: challengeMilestones,
+        enableReminders,
         status: 'pending',
+        chatEnabled: true,
         createdAt: new Date()
       });
       
+      // Check and update status
       challenge.checkAndUpdateStatus();
       await challenge.save();
       
-      await challenge.populate('participants.user', 'displayName email avatarUrl');
-      await challenge.populate('createdBy', 'displayName email avatarUrl');
-    
+      // Schedule notifications
+      if (enableReminders) {
+        await notificationService.scheduleChallengeReminders(challenge);
+      }
+      
+      // Send invite notifications
+      for (const participantId of participantIds) {
+        await notificationService.sendChallengeInvite(
+          participantId,
+          challenge.title,
+          mongoUser._id
+        );
+      }
+      
+      // Populate before returning
+      await challenge.populate('participants.user createdBy');
+      
       // Add isCurrentUser field
       return addIsCurrentUserToParticipants(challenge, userId);
     },
@@ -748,6 +911,150 @@ export const resolvers = {
         author: saved.author
       };
     },
+
+    addMilestone: async (_, { challengeId, milestone }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const challenge = await challengeModel.findById(challengeId);
+      if (!challenge) throw new GraphQLError('Challenge not found');
+      
+      // Check if user is creator or admin
+      const participant = challenge.participants.find(
+        p => p.user.toString() === userId.toString()
+      );
+      
+      if (!participant || !['creator', 'admin'].includes(participant.role)) {
+        throw new GraphQLError('Only creator or admin can add milestones');
+      }
+      
+      const newMilestone = {
+        id: new mongoose.Types.ObjectId().toString(),
+        ...milestone,
+        achievedBy: [],
+        createdAt: new Date()
+      };
+      
+      challenge.milestones.push(newMilestone);
+      await challenge.save();
+      
+      // Notify all participants
+      await notificationService.notifyNewMilestone(
+        challenge,
+        newMilestone
+      );
+      
+      return newMilestone;
+    },
+
+    sendChatMessage: async (_, { input }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const { challengeId, text, type, metadata } = input;
+      
+      // Verify user is participant
+      const challenge = await challengeModel.findById(challengeId);
+      const isParticipant = challenge?.participants.some(
+        p => p.user.toString() === userId.toString()
+      );
+      
+      if (!isParticipant) {
+        throw new GraphQLError('Not a participant in this challenge');
+      }
+      
+      const message = await chatMessageModel.create({
+        challengeId,
+        user: userId,
+        text,
+        type,
+        metadata,
+        reactions: []
+      });
+      
+      await message.populate('user', 'displayName avatarUrl');
+      
+      // Update challenge last chat activity
+      challenge.lastChatActivity = new Date();
+      await challenge.save();
+      
+      // Publish to subscribers
+      pubsub.publish(`CHAT_MESSAGE_${challengeId}`, {
+        chatMessageAdded: message
+      });
+      
+      // Send push notifications to other participants
+      await notificationService.notifyChatMessage(
+        challenge,
+        message,
+        userId
+      );
+      
+      return message;
+    },
+
+    addReaction: async (_, { input }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const { messageId, emoji } = input;
+      
+      const message = await chatMessageModel.findById(messageId);
+      if (!message) throw new GraphQLError('Message not found');
+      
+      // Check if user already reacted with this emoji
+      const existingReaction = message.reactions.find(
+        r => r.user.toString() === userId.toString() && r.emoji === emoji
+      );
+      
+      if (!existingReaction) {
+        message.reactions.push({
+          user: userId,
+          emoji,
+          createdAt: new Date()
+        });
+        await message.save();
+      }
+      
+      await message.populate('user reactions.user');
+      
+      // Publish update
+      pubsub.publish(`CHAT_MESSAGE_${message.challengeId}`, {
+        chatMessageUpdated: message
+      });
+      
+      return message;
+    },
+
+    markNotificationRead: async (_, { notificationId }, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const notification = await notificationModel.findOneAndUpdate(
+        { _id: notificationId, userId },
+        { read: true },
+        { new: true }
+      );
+      
+      if (!notification) throw new GraphQLError('Notification not found');
+      
+      return notification;
+    },
+
+    updateNotificationSettings: async (_, args, { userId }) => {
+      if (!userId) throw new GraphQLError('Not authenticated');
+      
+      const user = await userModel.findByIdAndUpdate(
+        userId,
+        {
+          notificationSettings: {
+            enableDailyReminders: args.enableDailyReminders,
+            reminderTime: args.reminderTime,
+            enableSocialNotifications: args.enableSocialNotifications,
+            enableAchievementNotifications: args.enableAchievementNotifications
+          }
+        },
+        { new: true }
+      );
+      
+      return user;
+    }
   },
 
   Subscription: {
@@ -762,6 +1069,26 @@ export const resolvers = {
       resolve: (payload) => payload.mediaAdded
       }
     },
+
+    chatMessageAdded: {
+      subscribe: (_, { challengeId }) => 
+        pubsub.asyncIterator([`CHAT_MESSAGE_${challengeId}`])
+    },
+
+    chatMessageUpdated: {
+      subscribe: (_, { challengeId }) => 
+        pubsub.asyncIterator([`CHAT_MESSAGE_UPDATE_${challengeId}`])
+    },
+
+    milestoneAchieved: {
+      subscribe: (_, { challengeId }) => 
+        pubsub.asyncIterator([`MILESTONE_ACHIEVED_${challengeId}`])
+    },
+
+    challengeAnalyticsUpdated: {
+      subscribe: (_, { challengeId }) => 
+        pubsub.asyncIterator([`ANALYTICS_UPDATE_${challengeId}`])
+    }
   },
 
   Media: {
@@ -824,6 +1151,12 @@ export const resolvers = {
         totalParticipants: acceptedParticipants.length,
         participantsStatus
       };
+    },
+    analytics: async (challenge, _, { userId }) => {
+      return await analyticsService.getChallengeAnalytics(
+        challenge._id,
+        userId
+      );
     }
   },
 }
