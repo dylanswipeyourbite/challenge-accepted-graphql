@@ -1,3 +1,5 @@
+import mongoose from 'mongoose';
+
 // File: src/models/ChatMessage.js
 const chatMessageSchema = new mongoose.Schema({
     challengeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Challenge', required: true },

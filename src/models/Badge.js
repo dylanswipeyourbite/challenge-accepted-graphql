@@ -1,3 +1,5 @@
+import mongoose from 'mongoose';
+
 // File: src/models/Badge.js
 const badgeSchema = new mongoose.Schema({
     type: { type: String, required: true, unique: true },

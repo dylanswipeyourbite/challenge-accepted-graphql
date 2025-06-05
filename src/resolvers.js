@@ -1,11 +1,10 @@
 import { PubSub } from 'graphql-subscriptions';
-import { challengeModel } from './models/Challenge.js';
-import { userModel } from './models/User.js'; 
-import { mediaModel } from './models/Media.js'; 
 import { GraphQLScalarType, Kind, GraphQLError } from 'graphql';
 import { buildParticipantsArray } from './utils/buildParticipantsArray.js';
 import { getUserActivitySummary } from './utils/getUserActivitySummary.js';
 import { activatePendingChallenges } from './utils/activatePendingChallenges.js';
+import { userModel } from './models/User.js'; 
+import { mediaModel } from './models/Media.js';
 import { dailyLogModel } from './models/DailyLog.js';
 import { challengeModel } from './models/Challenge.js';
 import { chatMessageModel } from './models/ChatMessage.js';
