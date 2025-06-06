@@ -1,20 +1,46 @@
+// src/models/Badge.js
 import mongoose from 'mongoose';
 
-// File: src/models/Badge.js
 const badgeSchema = new mongoose.Schema({
-    type: { type: String, required: true, unique: true },
-    name: { type: String, required: true },
-    description: { type: String, required: true },
-    icon: { type: String, required: true },
-    category: {
+  type: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  name: {
+    type: String,
+    required: true
+  },
+  description: {
+    type: String,
+    required: true
+  },
+  icon: {
+    type: String,
+    required: true
+  },
+  category: {
+    type: String,
+    required: true,
+    enum: ['streak', 'points', 'social', 'milestone', 'special']
+  },
+  criteria: {
+    type: {
       type: String,
-      enum: ['streak', 'points', 'social', 'milestone', 'special'],
       required: true
     },
-    criteria: {
-      type: { type: String },
-      value: { type: Number }
+    value: {
+      type: Number,
+      required: true
     }
-  });
+  }
+}, {
+  timestamps: true
+});
 
-export const badgeModel = mongoose.model('badge', badgeSchema);
+// Indexes
+badgeSchema.index({ type: 1 });
+badgeSchema.index({ category: 1 });
+
+export const badgeModel = mongoose.model('Badge', badgeSchema);
