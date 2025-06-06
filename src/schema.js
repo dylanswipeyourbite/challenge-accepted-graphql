@@ -191,7 +191,7 @@ export const typeDefs = gql`#graphql
     id: ID!
     type: String!
     name: String!
-    description: String!
+    description: String
     icon: String!
     category: BadgeCategory!
     criteria: BadgeCriteria!
@@ -260,7 +260,7 @@ export const typeDefs = gql`#graphql
     type: String!
     value: Int!
     date: Date!
-    description: String!
+    description: String
   }
   
   type UserPatterns {
@@ -294,7 +294,7 @@ export const typeDefs = gql`#graphql
   type ChallengeTemplate {
     id: ID!
     title: String!
-    description: String!
+    description: String
     rules: [String]
     sport: Sport!
     minWeeklyActivities: Int!
@@ -333,10 +333,15 @@ export const typeDefs = gql`#graphql
 
   # ============ ENUMS ============
   
-  enum Sport {
+ enum Sport {
     running
     cycling
-    workout
+    swimming
+    gym
+    yoga
+    walking
+    hiking
+    other
   }
 
   enum ChallengeType {

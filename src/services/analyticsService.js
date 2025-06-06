@@ -1,3 +1,6 @@
+import { challengeModel } from '../models/Challenge.js'; 
+import { dailyLogModel } from '../models/DailyLog.js'; 
+
 export const analyticsService = {
     async getChallengeAnalytics(challengeId, userId) {
       const challenge = await challengeModel.findById(challengeId);
@@ -32,7 +35,7 @@ export const analyticsService = {
       const activityDistribution = Object.entries(activityCounts).map(([type, count]) => ({
         type,
         count,
-        percentage: totalActivities > 0 ? (count / totalActivities) * 100 : 0
+        percentage: totalActivities > 0 ? parseFloat(((count / totalActivities) * 100).toFixed(2)) : 0.0
       }));
       
       // Weekly progress

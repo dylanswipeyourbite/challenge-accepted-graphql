@@ -24,7 +24,7 @@ const milestoneSchema = new mongoose.Schema({
 
 const challengeSchema = new mongoose.Schema({
   title: { type: String, required: true },
-  description: { type: String, required: true },
+  description: { type: String},
   rules: [{ type: String }], // Changed from String to array of Strings
   sport: { 
     type: String, 
@@ -67,7 +67,7 @@ const challengeSchema = new mongoose.Schema({
   allowedActivities: {
     type: [String],
     enum: ['running', 'cycling', 'swimming', 'gym','yoga', 'walking', 'hiking', 'other'],
-    default: ['running', 'cycling', 'workout', 'other']
+    default: ['running', 'cycling', 'gym', 'other']
   },
   requireDailyPhoto: { type: Boolean, default: false },
   

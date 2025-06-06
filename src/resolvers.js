@@ -479,7 +479,7 @@ export const resolvers = {
           title: '30-Day Fitness',
           description: 'Build a consistent fitness habit in 30 days',
           rules: 'Complete at least one activity per day\nActivities must be at least 30 minutes\nMix different types of exercises\nSubmit photo proof for each activity',
-          sport: 'workout',
+          sport: 'gym',
           minWeeklyActivities: 5,
           allowedActivities: ['Gym', 'Running', 'Cycling', 'Yoga', 'Swimming', 'Other'],
           suggestedMilestones: [
@@ -537,7 +537,7 @@ export const resolvers = {
 
 
       // Convert allowedActivities to lowercase
-      const normalizedAllowedActivities = (allowedActivities || ['running', 'cycling', 'workout', 'other', 'gym', 'swimming', 'yoga', 'walking', 'hiking']).map(activity => 
+      const normalizedAllowedActivities = (allowedActivities || ['running', 'cycling', 'gym', 'other', 'swimming', 'yoga', 'walking', 'hiking']).map(activity => 
         activity.toLowerCase())
       
       // Validate dates

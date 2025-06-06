@@ -1,6 +1,7 @@
 // File: src/services/notificationService.js
 
 import { notificationModel } from '../models/Notification.js';
+import { userModel } from '../models/User.js'; 
 import admin from 'firebase-admin';
 
 export const notificationService = {
