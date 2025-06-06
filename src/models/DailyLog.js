@@ -22,7 +22,7 @@ const dailyLogSchema = new mongoose.Schema({
   },
   activityType: { 
     type: String, 
-    enum: ['running', 'cycling', 'workout', 'other'],
+    enum: ['running', 'cycling', 'swimming', 'gym','yoga', 'walking', 'hiking', 'other'],
     required: function() { return this.type === 'activity'; }
   },
   notes: { type: String },

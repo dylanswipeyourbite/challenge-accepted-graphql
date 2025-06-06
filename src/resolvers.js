@@ -517,36 +517,39 @@ export const resolvers = {
       // Map frontend field names to backend expectations
       const {
         title,
-        description, // No default value - let it be undefined if not provided
-        rules = '', // Default to empty string if not provided
+        description = '',
+        rules = [], // Frontend sends array, backend now expects array
         sport,
         type,
         startDate,
-        endDate, // Frontend uses 'endDate', backend expects 'timeLimit'
+        timeLimit, // Now frontend should send timeLimit instead of endDate
         minWeeklyActivities = 4,
         minPointsToJoin = 0,
-        allowedActivities = ['running', 'cycling', 'workout', 'other', 'gym', 'swimming', 'yoga', 'walking', 'hiking'],
+        allowedActivities = ['running', 'cycling', 'swimming', 'gym','yoga', 'walking', 'hiking', 'other'],
         requireDailyPhoto = false,
         creatorRestDays = 1,
-        allowRestDays = true,
-        restDaysPerWeek = 2,
         participantIds = [],
         wager,
-        templateId, // Frontend sends 'templateId', backend expects 'template'
+        template,
         milestones = [],
         enableReminders = true
       } = input;
+
 
       // Convert allowedActivities to lowercase
       const normalizedAllowedActivities = (allowedActivities || ['running', 'cycling', 'workout', 'other', 'gym', 'swimming', 'yoga', 'walking', 'hiking']).map(activity => 
         activity.toLowerCase())
       
-      // Convert rules array to string if needed
-      const rulesString = Array.isArray(rules) ? rules.join('\n') : rules;
-      
       // Validate dates
       const start = new Date(startDate);
-      const end = new Date(endDate); // Use endDate from frontend
+      const end = new Date(timeLimit);
+      
+      // Check if dates are valid
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        throw new GraphQLError('Invalid date format', {
+          extensions: { code: 'BAD_USER_INPUT' }
+        });
+      }
       
       if (start >= end) {
         throw new GraphQLError('End date must be after start date', {
@@ -561,30 +564,32 @@ export const resolvers = {
       // Create milestones with proper structure
       const challengeMilestones = milestones.map(m => ({
         id: new mongoose.Types.ObjectId().toString(),
-        title: m.name || m.title, // Handle both 'name' and 'title'
+        title: m.title,
         description: m.description,
         type: m.type,
-        targetValue: m.target || m.targetValue, // Handle both field names
+        targetValue: m.targetValue,
         icon: m.icon || '🎯',
         reward: m.reward,
         achievedBy: [],
         createdAt: new Date()
       }));
       
-      // Build challenge object, only including description if provided
-      const challengeData = {
+      // Create challenge with mapped fields
+      const challenge = await challengeModel.create({
         title,
+        description,
+        rules, // Now storing as array
         sport,
         type,
         startDate: start,
-        timeLimit: end, // Map endDate to timeLimit
+        timeLimit: end,
         minWeeklyActivities,
         minPointsToJoin,
         allowedActivities: normalizedAllowedActivities,
         requireDailyPhoto,
         creatorRestDays,
         wager,
-        template: templateId, // Map templateId to template
+        template,
         createdBy: mongoUser._id,
         participants,
         milestones: challengeMilestones,
@@ -592,20 +597,7 @@ export const resolvers = {
         status: 'pending',
         chatEnabled: true,
         createdAt: new Date()
-      };
-      
-      // Only add description if it's provided
-      if (description !== undefined && description !== null && description !== '') {
-        challengeData.description = description;
-      }
-      
-      // Only add rules if it's provided
-      if (rulesString) {
-        challengeData.rules = rulesString;
-      }
-      
-      // Create challenge
-      const challenge = await challengeModel.create(challengeData);
+      });
       
       // Check and update status
       challenge.checkAndUpdateStatus();
@@ -626,13 +618,13 @@ export const resolvers = {
           );
         }
       }
-
-      // Populate before returning
-      await challenge.populate('participants.user createdBy');
-      
-      // Add isCurrentUser field
-      return addIsCurrentUserToParticipants(challenge, userId);
-    },
+    
+    // Populate before returning
+    await challenge.populate('participants.user createdBy');
+    
+    // Add isCurrentUser field
+    return addIsCurrentUserToParticipants(challenge, userId);
+  },
 
     updateProgress: async (_, { challengeId, progress }, { userId }) => {
       const challenge = await challengeModel.findById(challengeId);

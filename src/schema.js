@@ -36,7 +36,7 @@ export const typeDefs = gql`#graphql
     # Basic info
     title: String!
     description: String
-    rules: String
+    rules: [String]
     sport: Sport!
     type: ChallengeType!
     startDate: Date!
@@ -295,7 +295,7 @@ export const typeDefs = gql`#graphql
     id: ID!
     title: String!
     description: String!
-    rules: String!
+    rules: [String]
     sport: Sport!
     minWeeklyActivities: Int!
     allowedActivities: [String!]!
@@ -558,7 +558,7 @@ export const typeDefs = gql`#graphql
     wager: String
     
     # Requirements
-    rules: String!  # Backend expects string, not array
+    rules: [String]
     minWeeklyActivities: Int
     minPointsToJoin: Int
     allowedActivities: [String!]

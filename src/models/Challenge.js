@@ -1,20 +1,58 @@
-// src/models/Challenge.js
+// Updated challengeSchema in src/models/Challenge.js
+
 import mongoose from 'mongoose';
 import { participantSchema } from './Participant.js';
 
+const milestoneSchema = new mongoose.Schema({
+  id: { type: String, required: true },
+  title: { type: String, required: true },
+  description: { type: String },
+  type: {
+    type: String,
+    enum: ['points', 'streak', 'activities', 'custom'],
+    required: true
+  },
+  targetValue: { type: Number, required: true },
+  icon: { type: String, default: '🎯' },
+  reward: { type: String },
+  achievedBy: [{
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    achievedAt: { type: Date }
+  }],
+  createdAt: { type: Date, default: Date.now }
+});
+
 const challengeSchema = new mongoose.Schema({
   title: { type: String, required: true },
-  sport: { type: String, enum: ['running', 'cycling', 'workout', 'other', 'gym', 'swimming', 'yoga', 'walking', 'hiking'], required: true },
-  type: { type: String, enum: ['competitive', 'collaborative'], required: true },
+  description: { type: String, required: true },
+  rules: [{ type: String }], // Changed from String to array of Strings
+  sport: { 
+    type: String, 
+    enum: ['running', 'cycling', 'swimming', 'gym','yoga', 'walking', 'hiking', 'other'], 
+    required: true 
+  },
+  type: { 
+    type: String, 
+    enum: ['competitive', 'collaborative'], 
+    required: true 
+  },
   startDate: { type: Date, required: true },
   timeLimit: { type: Date, required: true }, // End date
   wager: { type: String },
 
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  createdBy: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: true 
+  },
   participants: [participantSchema],
 
   createdAt: { type: Date, default: Date.now },
-  status: { type: String, enum: ['active', 'pending', 'completed', 'expired'], default: 'pending' },
+  status: { 
+    type: String, 
+    enum: ['active', 'pending', 'completed', 'expired'], 
+    default: 'pending' 
+  },
   challengeStreak: { 
     type: Number, 
     default: 0 
@@ -23,17 +61,15 @@ const challengeSchema = new mongoose.Schema({
     type: Date 
   },
 
-  description: { type: String, required: false },
-  rules: { type: String },
+  // Requirements
   minWeeklyActivities: { type: Number, default: 4 },
   minPointsToJoin: { type: Number, default: 0 },
   allowedActivities: {
     type: [String],
-    enum: ['running', 'cycling', 'workout', 'other'],
+    enum: ['running', 'cycling', 'swimming', 'gym','yoga', 'walking', 'hiking', 'other'],
     default: ['running', 'cycling', 'workout', 'other']
   },
   requireDailyPhoto: { type: Boolean, default: false },
-  template: { type: String },
   
   // Notification preferences
   enableReminders: { type: Boolean, default: true },
@@ -42,6 +78,9 @@ const challengeSchema = new mongoose.Schema({
   // Creator's rest days
   creatorRestDays: { type: Number, default: 1 },
   
+  // Template reference
+  template: { type: String },
+  
   // Badges earned in this challenge
   earnedBadges: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -49,24 +88,22 @@ const challengeSchema = new mongoose.Schema({
     earnedAt: Date
   }],
   
-  milestones: [{
-    id: { type: String, required: true },
-    title: { type: String, required: true },
-    description: String,
-    targetValue: Number, // e.g., 100 points, 7 days streak
-    type: {
-      type: String,
-      enum: ['points', 'streak', 'activities', 'custom'],
-      required: true
-    },
-    icon: String,
-    reward: String, // Description of reward
-    achievedBy: [{
-      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      achievedAt: Date
-    }],
-    createdAt: { type: Date, default: Date.now }
-  }]
+  // Milestones
+  milestones: [milestoneSchema],
+  
+  // Chat
+  chatEnabled: { type: Boolean, default: true },
+  lastChatActivity: { type: Date }
+});
+
+// Virtual for id field
+challengeSchema.virtual('id').get(function() {
+  return this._id.toHexString();
+});
+
+// Ensure virtual fields are serialized
+challengeSchema.set('toJSON', {
+  virtuals: true
 });
 
 // Add method to update challenge streak
@@ -100,6 +137,32 @@ challengeSchema.methods.updateChallengeStreak = async function() {
     this.lastCompleteLogDate = today;
     await this.save();
   }
+};
+
+// Method to check daily completion
+challengeSchema.methods.checkDailyCompletion = async function() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  
+  const acceptedParticipants = this.participants.filter(p => p.status === 'accepted');
+  
+  if (acceptedParticipants.length === 0) return false;
+  
+  const { dailyLogModel } = await import('./DailyLog.js');
+  
+  for (const participant of acceptedParticipants) {
+    const todayLog = await dailyLogModel.findOne({
+      challengeId: this._id,
+      user: participant.user,
+      date: { $gte: today, $lt: tomorrow }
+    });
+    
+    if (!todayLog) return false;
+  }
+  
+  return true;
 };
 
 challengeSchema.methods.checkAndUpdateStatus = function() {
