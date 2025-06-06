@@ -35,7 +35,7 @@ export const typeDefs = gql`#graphql
     id: ID!
     # Basic info
     title: String!
-    description: String!
+    description: String
     rules: String
     sport: Sport!
     type: ChallengeType!
@@ -550,7 +550,7 @@ export const typeDefs = gql`#graphql
   input CreateChallengeInput {
     # Basic info
     title: String!
-    description: String!
+    description: String
     sport: Sport!
     type: ChallengeType!
     startDate: Date!

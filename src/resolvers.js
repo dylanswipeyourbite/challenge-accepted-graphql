@@ -13,6 +13,7 @@ import { notificationModel } from './models/Notification.js';
 import { milestoneService } from './services/milestoneService.js';
 import { analyticsService } from './services/analyticsService.js';
 import { notificationService } from './services/notificationService.js';
+import mongoose from 'mongoose';
 
 const pubsub = new PubSub();
 
@@ -516,15 +517,15 @@ export const resolvers = {
       // Map frontend field names to backend expectations
       const {
         title,
-        description = '',
-        rules = [], // Frontend sends array, backend expects string
+        description, // No default value - let it be undefined if not provided
+        rules = '', // Default to empty string if not provided
         sport,
         type,
         startDate,
         endDate, // Frontend uses 'endDate', backend expects 'timeLimit'
         minWeeklyActivities = 4,
         minPointsToJoin = 0,
-        allowedActivities = ['running', 'cycling', 'workout', 'other'],
+        allowedActivities = ['running', 'cycling', 'workout', 'other', 'gym', 'swimming', 'yoga', 'walking', 'hiking'],
         requireDailyPhoto = false,
         creatorRestDays = 1,
         allowRestDays = true,
@@ -535,6 +536,10 @@ export const resolvers = {
         milestones = [],
         enableReminders = true
       } = input;
+
+      // Convert allowedActivities to lowercase
+      const normalizedAllowedActivities = (allowedActivities || ['running', 'cycling', 'workout', 'other', 'gym', 'swimming', 'yoga', 'walking', 'hiking']).map(activity => 
+        activity.toLowerCase())
       
       // Convert rules array to string if needed
       const rulesString = Array.isArray(rules) ? rules.join('\n') : rules;
@@ -566,18 +571,16 @@ export const resolvers = {
         createdAt: new Date()
       }));
       
-      // Create challenge with mapped fields
-      const challenge = await challengeModel.create({
+      // Build challenge object, only including description if provided
+      const challengeData = {
         title,
-        description,
-        rules: rulesString, // Use converted string
         sport,
         type,
         startDate: start,
         timeLimit: end, // Map endDate to timeLimit
         minWeeklyActivities,
         minPointsToJoin,
-        allowedActivities,
+        allowedActivities: normalizedAllowedActivities,
         requireDailyPhoto,
         creatorRestDays,
         wager,
@@ -589,7 +592,20 @@ export const resolvers = {
         status: 'pending',
         chatEnabled: true,
         createdAt: new Date()
-      });
+      };
+      
+      // Only add description if it's provided
+      if (description !== undefined && description !== null && description !== '') {
+        challengeData.description = description;
+      }
+      
+      // Only add rules if it's provided
+      if (rulesString) {
+        challengeData.rules = rulesString;
+      }
+      
+      // Create challenge
+      const challenge = await challengeModel.create(challengeData);
       
       // Check and update status
       challenge.checkAndUpdateStatus();
@@ -610,13 +626,13 @@ export const resolvers = {
           );
         }
       }
-    
-    // Populate before returning
-    await challenge.populate('participants.user createdBy');
-    
-    // Add isCurrentUser field
-    return addIsCurrentUserToParticipants(challenge, userId);
-  },
+
+      // Populate before returning
+      await challenge.populate('participants.user createdBy');
+      
+      // Add isCurrentUser field
+      return addIsCurrentUserToParticipants(challenge, userId);
+    },
 
     updateProgress: async (_, { challengeId, progress }, { userId }) => {
       const challenge = await challengeModel.findById(challengeId);
