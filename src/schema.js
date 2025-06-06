@@ -170,10 +170,10 @@ export const typeDefs = gql`#graphql
   
   type Milestone {
     id: ID!
-    title: String!
-    description: String!
+    title: String!  # Changed from 'name' to 'title'
+    description: String
     type: MilestoneType!
-    targetValue: Int!
+    targetValue: Int!  # Changed from 'target' to 'targetValue'
     icon: String!
     reward: String
     achievedBy: [MilestoneAchievement!]!
@@ -310,6 +310,9 @@ export const typeDefs = gql`#graphql
     totalPoints: Int!
     completedChallenges: Int!
     activeChallenge: ActiveChallengeInfo
+    weeklyActivityDays: Int!
+    weeklyRestDays: Int!
+    weeklyPoints: Int!
   }
 
   type ActiveChallengeInfo {
@@ -551,11 +554,11 @@ export const typeDefs = gql`#graphql
     sport: Sport!
     type: ChallengeType!
     startDate: Date!
-    timeLimit: Date!
+    timeLimit: Date!  # This is what backend expects (not endDate)
     wager: String
     
     # Requirements
-    rules: String
+    rules: String!  # Backend expects string, not array
     minWeeklyActivities: Int
     minPointsToJoin: Int
     allowedActivities: [String!]
@@ -563,21 +566,21 @@ export const typeDefs = gql`#graphql
     creatorRestDays: Int
     
     # Template
-    template: String
+    template: String  # Backend expects 'template', not 'templateId'
     enableReminders: Boolean
     
     # Participants
     participantIds: [String!]!
     
-    # Milestones
+    # Milestones - ensure these field names match
     milestones: [CreateMilestoneInput!]
   }
 
   input CreateMilestoneInput {
-    title: String!
-    description: String!
+    title: String!  
+    description: String
     type: MilestoneType!
-    targetValue: Int!
+    targetValue: Int! 
     icon: String!
     reward: String
   }

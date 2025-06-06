@@ -157,49 +157,64 @@ export const resolvers = {
   Query: {
     userStats: async (_, __, { userId }) => {
       if (!userId) throw new GraphQLError('Not authenticated');
-
-      const summary = await getUserActivitySummary(userId);
+  
+      const today = new Date();
+      const weekStart = getWeekStart(today);
+      
+      // Get this week's logs for weekly stats
+      const weeklyLogs = await dailyLogModel.find({
+        user: userId,
+        date: { $gte: weekStart, $lt: new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000) }
+      });
       
       // Get active challenge info
       const activeChallenge = await challengeModel.findOne({
         'participants.user': userId,
         status: 'active'
       }).populate('participants.user');
-
+  
       const participant = activeChallenge?.participants.find(
         p => p.user._id.toString() === userId.toString()
       );
-
+  
       // Check if logged today
-      const today = new Date();
       today.setHours(0, 0, 0, 0);
       const hasLoggedToday = await dailyLogModel.findOne({
         challengeId: activeChallenge?._id,
         user: userId,
         date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) }
       });
-
+  
+      // Calculate weekly stats
+      const weeklyActivityDays = weeklyLogs.filter(log => log.type === 'activity').length;
+      const weeklyRestDays = weeklyLogs.filter(log => log.type === 'rest').length;
+      const weeklyPoints = weeklyLogs.reduce((sum, log) => sum + log.points, 0);
+  
       let activeChallengeInfo = null;
       if (activeChallenge && participant) {
         activeChallengeInfo = {
           id: activeChallenge._id.toString(),
           title: activeChallenge.title,
           allowedRestDays: participant.restDays || 1,
-          usedRestDaysThisWeek: summary.weeklyRestDays,
+          usedRestDaysThisWeek: weeklyRestDays,
           hasLoggedToday: !!hasLoggedToday
         };
       }
-
+  
       const completedChallenges = await challengeModel.countDocuments({
         'participants.user': userId,
         status: 'completed'
       });
-
+  
       return {
-        currentStreak: summary.currentStreak,
-        totalPoints: summary.totalPoints,
+        currentStreak: participant?.dailyStreak || 0,
+        totalPoints: participant?.totalPoints || 0,
         completedChallenges,
-        activeChallenge: activeChallengeInfo
+        activeChallenge: activeChallengeInfo,
+        // Add the weekly stats that frontend expects
+        weeklyActivityDays,
+        weeklyRestDays,
+        weeklyPoints
       };
     },
 
@@ -434,6 +449,50 @@ export const resolvers = {
         milestoneAchievements,
         missedDays
       };
+    },
+
+    challengeTemplates: async () => {
+      // Return static templates for now
+      return [
+        {
+          id: 'marathon_training',
+          title: 'Marathon Training',
+          description: 'Prepare for your marathon with structured training',
+          rules: 'Run at least 4 times per week\nInclude one long run per week\nLog all activities with distance and time\nRest days are mandatory for recovery',
+          sport: 'running',
+          minWeeklyActivities: 4,
+          allowedActivities: ['Running'],
+          suggestedMilestones: [
+            {
+              title: 'First 10K',
+              description: 'Complete your first 10K run',
+              type: 'custom',
+              targetValue: 1,
+              icon: '🏃'
+            }
+          ],
+          icon: '🏃'
+        },
+        {
+          id: '30_day_fitness',
+          title: '30-Day Fitness',
+          description: 'Build a consistent fitness habit in 30 days',
+          rules: 'Complete at least one activity per day\nActivities must be at least 30 minutes\nMix different types of exercises\nSubmit photo proof for each activity',
+          sport: 'workout',
+          minWeeklyActivities: 5,
+          allowedActivities: ['Gym', 'Running', 'Cycling', 'Yoga', 'Swimming', 'Other'],
+          suggestedMilestones: [
+            {
+              title: 'First Week Complete',
+              description: 'Complete 7 consecutive days',
+              type: 'streak',
+              targetValue: 7,
+              icon: '🔥'
+            }
+          ],
+          icon: '💪'
+        }
+      ];
     }
   },
 
@@ -454,29 +513,35 @@ export const resolvers = {
       const mongoUser = await userModel.findById(userId);
       if (!mongoUser) throw new GraphQLError('User not found');
       
+      // Map frontend field names to backend expectations
       const {
         title,
-        description = '', // Default empty if not provided
-        rules = '',
+        description = '',
+        rules = [], // Frontend sends array, backend expects string
         sport,
         type,
         startDate,
-        timeLimit,
-        minWeeklyActivities = 4, // Default values
+        endDate, // Frontend uses 'endDate', backend expects 'timeLimit'
+        minWeeklyActivities = 4,
         minPointsToJoin = 0,
         allowedActivities = ['running', 'cycling', 'workout', 'other'],
         requireDailyPhoto = false,
         creatorRestDays = 1,
-        participantIds,
+        allowRestDays = true,
+        restDaysPerWeek = 2,
+        participantIds = [],
         wager,
-        template,
+        templateId, // Frontend sends 'templateId', backend expects 'template'
         milestones = [],
         enableReminders = true
       } = input;
       
+      // Convert rules array to string if needed
+      const rulesString = Array.isArray(rules) ? rules.join('\n') : rules;
+      
       // Validate dates
       const start = new Date(startDate);
-      const end = new Date(timeLimit);
+      const end = new Date(endDate); // Use endDate from frontend
       
       if (start >= end) {
         throw new GraphQLError('End date must be after start date', {
@@ -488,30 +553,35 @@ export const resolvers = {
       const participants = await buildParticipantsArray(participantIds, mongoUser._id);
       participants[0].restDays = creatorRestDays; // Creator is always first
       
-      // Create milestones with IDs
+      // Create milestones with proper structure
       const challengeMilestones = milestones.map(m => ({
         id: new mongoose.Types.ObjectId().toString(),
-        ...m,
+        title: m.name || m.title, // Handle both 'name' and 'title'
+        description: m.description,
+        type: m.type,
+        targetValue: m.target || m.targetValue, // Handle both field names
+        icon: m.icon || '🎯',
+        reward: m.reward,
         achievedBy: [],
         createdAt: new Date()
       }));
       
-      // Create challenge
+      // Create challenge with mapped fields
       const challenge = await challengeModel.create({
         title,
         description,
-        rules,
+        rules: rulesString, // Use converted string
         sport,
         type,
         startDate: start,
-        timeLimit: end,
+        timeLimit: end, // Map endDate to timeLimit
         minWeeklyActivities,
         minPointsToJoin,
         allowedActivities,
         requireDailyPhoto,
         creatorRestDays,
         wager,
-        template,
+        template: templateId, // Map templateId to template
         createdBy: mongoUser._id,
         participants,
         milestones: challengeMilestones,
@@ -531,20 +601,22 @@ export const resolvers = {
       }
       
       // Send invite notifications
-      for (const participantId of participantIds) {
-        await notificationService.sendChallengeInvite(
-          participantId,
-          challenge.title,
-          mongoUser._id
-        );
+      for (const participant of participants) {
+        if (participant.user.toString() !== mongoUser._id.toString()) {
+          await notificationService.sendChallengeInvite(
+            participant.user,
+            challenge.title,
+            mongoUser._id
+          );
+        }
       }
-      
-      // Populate before returning
-      await challenge.populate('participants.user createdBy');
-      
-      // Add isCurrentUser field
-      return addIsCurrentUserToParticipants(challenge, userId);
-    },
+    
+    // Populate before returning
+    await challenge.populate('participants.user createdBy');
+    
+    // Add isCurrentUser field
+    return addIsCurrentUserToParticipants(challenge, userId);
+  },
 
     updateProgress: async (_, { challengeId, progress }, { userId }) => {
       const challenge = await challengeModel.findById(challengeId);
@@ -1053,7 +1125,115 @@ export const resolvers = {
       );
       
       return user;
-    }
+    },
+
+    awardBadge: async (_, { userId, badgeType, challengeId }, { userId: currentUserId }) => {
+      if (!currentUserId) throw new GraphQLError('Not authenticated');
+      
+      // Find or create the badge definition
+      let badge = await badgeModel.findOne({ type: badgeType });
+      if (!badge) {
+        // Create badge from predefined list if it doesn't exist
+        const badgeDefinitions = {
+          'first_step': {
+            name: 'First Step',
+            description: 'Complete your first activity',
+            icon: '👟',
+            category: 'milestone',
+            criteria: { type: 'activities', value: 1 }
+          },
+          'week_warrior': {
+            name: 'Week Warrior',
+            description: 'Maintain a 7-day streak',
+            icon: '🔥',
+            category: 'streak',
+            criteria: { type: 'streak', value: 7 }
+          },
+          'century_club': {
+            name: 'Century Club',
+            description: 'Earn 100 points in a single challenge',
+            icon: '💯',
+            category: 'points',
+            criteria: { type: 'points', value: 100 }
+          },
+          'social_butterfly': {
+            name: 'Social Butterfly',
+            description: 'Cheer 50 posts',
+            icon: '🦋',
+            category: 'social',
+            criteria: { type: 'cheers', value: 50 }
+          },
+          'iron_will': {
+            name: 'Iron Will',
+            description: 'Complete a 30-day streak',
+            icon: '🏆',
+            category: 'streak',
+            criteria: { type: 'streak', value: 30 }
+          },
+          'team_player': {
+            name: 'Team Player',
+            description: 'Help your team achieve a 7-day collective streak',
+            icon: '🤝',
+            category: 'social',
+            criteria: { type: 'team_streak', value: 7 }
+          },
+          'early_bird': {
+            name: 'Early Bird',
+            description: 'Log 10 activities before 9 AM',
+            icon: '🌅',
+            category: 'special',
+            criteria: { type: 'early_logs', value: 10 }
+          },
+          'rest_master': {
+            name: 'Rest Master',
+            description: 'Use all your rest days wisely for 4 weeks',
+            icon: '😴',
+            category: 'special',
+            criteria: { type: 'rest_optimization', value: 4 }
+          }
+        };
+        
+        const badgeData = badgeDefinitions[badgeType];
+        if (!badgeData) {
+          throw new GraphQLError('Unknown badge type');
+        }
+        
+        badge = await badgeModel.create({
+          type: badgeType,
+          ...badgeData
+        });
+      }
+      
+      // Award badge to user
+      const user = await userModel.findById(userId);
+      if (!user) throw new GraphQLError('User not found');
+      
+      // Check if user already has this badge
+      const existingBadge = user.badges?.find(b => b.badge.toString() === badge._id.toString());
+      if (existingBadge) {
+        return existingBadge;
+      }
+      
+      // Add badge to user
+      if (!user.badges) user.badges = [];
+      const badgeEarned = {
+        badge: badge._id,
+        user: userId,
+        earnedAt: new Date(),
+        challengeId
+      };
+      
+      user.badges.push(badgeEarned);
+      await user.save();
+      
+      // Send notification
+      await notificationService.sendBadgeEarned(userId, badge.name, badge.description);
+      
+      return {
+        ...badgeEarned,
+        badge
+      };
+    },
   },
 
   Subscription: {
